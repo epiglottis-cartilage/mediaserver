@@ -1,0 +1,15 @@
+[package]
+name = "mediaserver"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+actix = "*"
+actix-web = "*"
+mime_guess = "*"
+bytes = "*"
+base64 = "*"
+image = "*"
+
+[profile.release]
+opt-level = 'z'
