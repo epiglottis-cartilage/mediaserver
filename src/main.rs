@@ -14,57 +14,52 @@ use std::{
 const BASE64_ENGINE: engine::GeneralPurpose = engine::general_purpose::STANDARD;
 
 #[get("/")]
-async fn hello() -> impl Responder {
-    HttpResponse::Ok().body("Hello world!")
-}
-
-#[get("/ip")]
 async fn ip(request: HttpRequest) -> impl Responder {
-    HttpResponse::Ok().body(format!("Find you at {:?}", request.peer_addr()))
-}
-
-async fn manual_hello() -> impl Responder {
-    HttpResponse::Ok().body("Hey there!")
+    HttpResponse::Ok().body(format!(
+        "<html><p>Find you at {:?}</p><a href='/file'>media</a></html>",
+        request.peer_addr()
+    ))
 }
 
 async fn file_handler(req: HttpRequest, path: web::Path<String>) -> Result<HttpResponse> {
-    println!("file {:?}", path);
     let path_str = path.into_inner();
-    let root_dir = "."; // 以当前目录为根目录
-    let full_path = Path::new(root_dir).join(&path_str);
+    let root_dir = Path::new("."); // 以当前目录为根目录
 
-    // 检查路径是否存在
-    if !full_path.exists() {
-        return Ok(HttpResponse::NotFound().body("File or directory not found"));
+    let path = root_dir.join(&path_str);
+    println!("file {}", path.display());
+    {
+        let full_path = path.canonicalize()?;
+        if !full_path.starts_with(root_dir.canonicalize().unwrap()) {
+            return Ok(HttpResponse::Forbidden().body("Outside of root directory"));
+        }
     }
-
     // 如果是文件，返回文件内容
-    if full_path.is_file() {
-        handle_file(&req, &full_path).await
-    } else if full_path.is_dir() {
-        handle_directory(&req, &full_path, &path_str).await
+    if path.is_file() {
+        handle_file(&req, &path).await
+    } else if path.is_dir() {
+        handle_directory(&req, &path, &path_str).await
     } else {
         // 其他情况（如特殊文件）
         Ok(HttpResponse::InternalServerError().body("Unknown file type"))
     }
 }
 
-async fn handle_file(req: &HttpRequest, full_path: &Path) -> Result<HttpResponse> {
-    println!("file {:?}", full_path);
-    let mime = from_path(full_path).first_or_octet_stream();
+async fn handle_file(req: &HttpRequest, path: &Path) -> Result<HttpResponse> {
+    println!("file {:?}", path);
+    let mime = from_path(path).first_or_octet_stream();
 
     // 检查是否有 Range 请求头
     if let Some(range_header) = req.headers().get(RANGE) {
         if let Ok(range) = range_header.to_str() {
-            if let Some((start, end)) = parse_range(range, full_path.metadata()?.len()) {
-                let mut file = fs::File::open(full_path)?;
+            if let Some((start, end)) = parse_range(range, path.metadata()?.len()) {
+                let mut file = fs::File::open(path)?;
                 file.seek(std::io::SeekFrom::Start(start)).unwrap();
                 let mut content = vec![0; (end - start + 1) as _];
                 file.read_exact(&mut content)?;
 
                 let content_range = ContentRange(ContentRangeSpec::Bytes {
                     range: Some((start, end)),
-                    instance_length: Some(full_path.metadata()?.len()),
+                    instance_length: Some(path.metadata()?.len()),
                 });
 
                 let response = HttpResponse::PartialContent()
@@ -78,7 +73,7 @@ async fn handle_file(req: &HttpRequest, full_path: &Path) -> Result<HttpResponse
     }
 
     // 如果没有 Range 请求，返回整个文件
-    let mut file = fs::File::open(full_path)?;
+    let mut file = fs::File::open(path)?;
     let mut content = Vec::new();
     file.read_to_end(&mut content)?;
 
@@ -93,10 +88,9 @@ async fn handle_directory(
     path_str: &str,
 ) -> Result<HttpResponse> {
     println!(
-        "{:?} asking for dir {} ({})",
+        "{:?} asking for dir {}",
         req.peer_addr(),
-        full_path.display(),
-        path_str
+        full_path.display()
     );
     let mut entries = fs::read_dir(full_path)?
         .filter_map(|entry| entry.ok())
@@ -105,25 +99,19 @@ async fn handle_directory(
     // 按名称排序
     entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
 
-    let parent_path = if path_str != "" {
-        Path::new(path_str)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-    } else {
-        None
-    };
+    let parent_path = full_path.parent();
 
     // 生成 HTML 响应
     let html = {
         let mut html = String::new();
-        html.push_str("<!DOCTYPE html><html><head><title>Directory Listing</title></head><body>");
+        html.push_str("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Directory Listing</title></head><body>");
         html.push_str(&format!("<h1>Directory: {}</h1>", path_str));
         html.push_str("<ul>");
 
         if let Some(parent) = parent_path {
             html.push_str(&format!(
                 "<li><a href=\"/file/{}\">..</a></li><li></li>",
-                parent
+                parent.display()
             ));
         }
 
@@ -290,14 +278,17 @@ fn get_video_duration(path: &Path) -> Result<f64, String> {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    use std::net::{Ipv4Addr, SocketAddrV4};
     HttpServer::new(|| {
         App::new()
-            .service(hello)
             .service(ip)
             .service(resource("/file/{path:.*}").to(file_handler))
-            .route("/hey", web::get().to(manual_hello))
+            .service(
+                resource("/file")
+                    .to(async |x| file_handler(x, web::Path::from(String::from(""))).await),
+            )
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8080))?
     .run()
     .await
 }
