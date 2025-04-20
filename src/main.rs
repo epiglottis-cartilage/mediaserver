@@ -16,7 +16,7 @@ const BASE64_ENGINE: engine::GeneralPurpose = engine::general_purpose::STANDARD;
 #[get("/")]
 async fn ip(request: HttpRequest) -> impl Responder {
     HttpResponse::Ok().body(format!(
-        "<html><p>Find you at {:?}</p><a href='/file'>media</a></html>",
+        "<html><h1>Find you at {:?}<br><a href='/file'>media</a></h1></html>",
         request.peer_addr()
     ))
 }
@@ -137,8 +137,7 @@ async fn handle_directory(
             // 检查是否是图片或视频
             if let Some(thumbnail_data) = generate_thumbnail(&full_file_path, &mime) {
                 html.push_str(&format!(
-                        "<li><a href=\"{}\">{}<img src=\"data:image/png;base64,{}\" height=\"200\" /></a></li>",
-                        path, name,thumbnail_data,
+                        "<li><a href=\"{path}\"><img src=\"data:image/png;base64,{thumbnail_data}\" height=\"200\" />{name}</a></li>"
                     ));
             } else {
                 html.push_str(&format!("<li><a href=\"{}\">{}</a></li>", path, name));
